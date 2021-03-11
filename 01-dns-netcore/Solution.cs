@@ -13,11 +13,12 @@ namespace dns_netcore
 	{
 		private IDNSClient dnsClient;
 		private ConcurrentDictionary<string, IP4Addr> cache;
-
+		private uint queryCounter;
 		public RecursiveResolver(IDNSClient client)
 		{
 			this.dnsClient = client;
 			this.cache = new ConcurrentDictionary<string, IP4Addr>();
+			queryCounter = 0;
 		}
 		// Given a domain (mff.cuni.cz), creates a list of all subdomains, e.g:
 		// [cz, cuni.cz, mff.cuni.cz]
@@ -36,7 +37,11 @@ namespace dns_netcore
 				string[] domains = domain.Split('.');
 				var subdomains = generateSubdomains(domain);
 				Array.Reverse(domains);
-				IP4Addr res = dnsClient.GetRootServers()[0];
+
+				// Distribute the queries to the root servers in a Round Robin way
+				// queryCounter is uint so it won't overflow to negative numbers
+				uint rootServerIndex = System.Threading.Interlocked.Increment(ref this.queryCounter);
+				IP4Addr res = dnsClient.GetRootServers()[(int)rootServerIndex % dnsClient.GetRootServers().Count];
 				String subdomain = null;
 
 				for (var i = 0; i < domains.Length; i++) {
@@ -54,7 +59,7 @@ namespace dns_netcore
 					var cacheValidations = new List<(string, Task<string>)>();
 					// Try all subdomains of the current domain
 					foreach (var cachedSubdomain in subdomains.Skip(i)) {
-						if (this.cache.TryGetValue(fullSubdomain, out cachedIP)) {
+						if (this.cache.TryGetValue(cachedSubdomain, out cachedIP)) {
 							// Possible cache hit, check if the record is still valid
 							var cacheQuery = this.dnsClient.Reverse(cachedIP);
 							cacheValidations.Add((cachedSubdomain, cacheQuery));
@@ -63,7 +68,7 @@ namespace dns_netcore
 					// Wait for the first Reverse Task to finish and then wait a bit for the other Tasks
 					// That way, a stuck Task will not block
 					Task.WaitAny(cacheValidations.Select(i => i.Item2).ToArray(), 550);
-					System.Threading.Thread.Sleep(50);
+					System.Threading.Thread.Sleep(10);
 
 					var finishedTasks = cacheValidations.FindAll(r => r.Item2.Status == TaskStatus.RanToCompletion).ToList();
 					// Remove failed Reverse checks from the cache
@@ -73,24 +78,22 @@ namespace dns_netcore
 					// Find "longest" subdomain that is validated
 					var validatedSubdomain = finishedTasks.FindAll(validation => validation.Item1 == validation.Item2.Result)
 							.Select(validation => validation.Item1)
-							.OrderBy(x => x.Split(".").Length)
+							.OrderByDescending(x => x.Split(".").Length)
 							.FirstOrDefault();
 
 					// Using cached address
 					if (!string.IsNullOrEmpty(validatedSubdomain) && this.cache.TryGetValue(validatedSubdomain, out res)) {
 						// Calculate how many subdomains we've jumped ahead by using the cached results
+						// Console.WriteLine($"Query {domain} -- Cache hit {validatedSubdomain} to {res}");
 						i = validatedSubdomain.Split(".").Length - 1;
 					} else {
 						fallbackQuery.Wait();
 						res = fallbackQuery.Result;
-						// Console.WriteLine($"Resolved {subdomain} to {res}");
 						this.cache.TryAdd(fullSubdomain, res);
-						// Console.WriteLine($"Caching {fullSubdomain}");
 					}
 
 				}
 				this.cache.TryAdd(domain, res);
-				// Console.WriteLine($"Caching {domain} to {res}");
 				return res;
 			});
 		}
