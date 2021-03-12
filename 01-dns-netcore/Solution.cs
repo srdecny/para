@@ -57,7 +57,7 @@ namespace dns_netcore
 
 					// In the meantime, check if any subdomain IP is cached
 					(IP4Addr, DateTime) cacheRecord;
-					var cacheValidations = new List<(string, Task<string>)>();
+					var cacheValidations = new List<((string, IP4Addr), Task<string>)>();
 					// Try all subdomains of the current domain, starting from the longest subdomain
 					foreach (var cachedSubdomain in subdomains.Skip(i).Reverse()) {
 						if (this.cache.TryGetValue(cachedSubdomain, out cacheRecord)) {
@@ -67,12 +67,12 @@ namespace dns_netcore
 							if ((int)cacheRecordAge.TotalMilliseconds < RecursiveResolver.TTL) {
 								res = cacheRecord.Item1;
 								i = cachedSubdomain.Split(".").Length - 1;	
-								Console.WriteLine($"{domain} -- Unvalidated cache hit {cachedSubdomain} to {res}");
+								// Console.WriteLine($"{domain} -- Unvalidated cache hit {cachedSubdomain} to {res}");
 								goto End; // oof
 							// Record is too old, validate it with reverse query
 							} else {
 								var cacheQuery = this.dnsClient.Reverse(cacheRecord.Item1);
-								cacheValidations.Add((cachedSubdomain, cacheQuery));
+								cacheValidations.Add(((cachedSubdomain, cacheRecord.Item1), cacheQuery));
 							}
 						}
 					}
@@ -82,13 +82,18 @@ namespace dns_netcore
 					System.Threading.Thread.Sleep(10);
 
 					var finishedTasks = cacheValidations.FindAll(r => r.Item2.Status == TaskStatus.RanToCompletion).ToList();
-					// Remove failed Reverse checks from the cache
-					foreach (var failedValidation in finishedTasks.FindAll(validation => validation.Item1 != validation.Item2.Result)) {
-						this.cache.TryRemove(failedValidation.Item1, out _);
+
+					foreach (var validation in finishedTasks) {
+						if (validation.Item1.Item1 != validation.Item2.Result) {
+							this.cache.TryRemove(validation.Item1.Item1, out _);
+						} else {
+							// Validated, refresh the TTL
+							this.cache.TryAdd(validation.Item1.Item1, (validation.Item1.Item2, DateTime.Now));
+						}
 					}
 					// Find "longest" subdomain that is validated
-					var validatedSubdomain = finishedTasks.FindAll(validation => validation.Item1 == validation.Item2.Result)
-							.Select(validation => validation.Item1)
+					var validatedSubdomain = finishedTasks.FindAll(validation => validation.Item1.Item1 == validation.Item2.Result)
+							.Select(validation => validation.Item1.Item1)
 							.OrderByDescending(x => x.Split(".").Length)
 							.FirstOrDefault();
 
