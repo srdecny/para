@@ -57,7 +57,7 @@ namespace dns_netcore
 
 					// In the meantime, check if any subdomain IP is cached
 					(IP4Addr address, DateTime time) cacheRecord;
-					var cacheValidations = new List<((string name, IP4Addr address) cacheRecord, Task<string> query)>();
+					var recordsToValidate = new List<(string name, IP4Addr address)>();
 					// Try all subdomains of the current domain, starting from the longest subdomain
 					foreach (var cachedSubdomain in subdomains.Skip(i).Reverse()) {
 						if (this.cache.TryGetValue(cachedSubdomain, out cacheRecord)) {
@@ -71,15 +71,18 @@ namespace dns_netcore
 								goto End; // oof
 							// Record is too old, validate it with reverse query
 							} else {
-								var cacheQuery = this.dnsClient.Reverse(cacheRecord.address);
-								cacheValidations.Add(((cachedSubdomain, cacheRecord.address), cacheQuery));
+								recordsToValidate.Add((cachedSubdomain, cacheRecord.address));
 							}
 						}
 					}
+					// Start the Reverse query tasks, as no young enough record was in the cache
+					List<((string name, IP4Addr address) cacheRecord, Task<string> query)> cacheValidations = recordsToValidate.Select(r => (r, dnsClient.Reverse(r.address))).ToList();
+					var validationTasks = cacheValidations.Select(validation => validation.query).ToList();
 					// Wait for the first Reverse Task to finish and then wait a bit for the other Tasks
 					// That way, a stuck Task will not block
-					Task.WaitAny(cacheValidations.Select(i => i.query).ToArray(), 110);
-					System.Threading.Thread.Sleep(10);
+					if (Task.WaitAny(cacheValidations.Select(i => i.query).ToArray(), 110) != -1) {
+						System.Threading.Thread.Sleep(10); // Skip the sleep if timeout occured
+					}
 
 					var finishedTasks = cacheValidations.FindAll(r => r.query.Status == TaskStatus.RanToCompletion).ToList();
 
