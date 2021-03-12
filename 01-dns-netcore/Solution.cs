@@ -62,7 +62,7 @@ namespace dns_netcore
 					foreach (var cachedSubdomain in subdomains.Skip(i).Reverse()) {
 						if (this.cache.TryGetValue(cachedSubdomain, out cacheRecord)) {
 							// Possible cache hit, check if the record is still valid
-							TimeSpan cacheRecordAge = cacheRecord.time - DateTime.Now;
+							TimeSpan cacheRecordAge = DateTime.Now - cacheRecord.time;
 							// Record is young enough, trust it 
 							if ((int)cacheRecordAge.TotalMilliseconds < RecursiveResolver.TTL) {
 								res = cacheRecord.address;
