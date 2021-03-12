@@ -56,44 +56,44 @@ namespace dns_netcore
 					var fallbackQuery = this.dnsClient.Resolve(res, subdomain);
 
 					// In the meantime, check if any subdomain IP is cached
-					(IP4Addr, DateTime) cacheRecord;
-					var cacheValidations = new List<((string, IP4Addr), Task<string>)>();
+					(IP4Addr address, DateTime time) cacheRecord;
+					var cacheValidations = new List<((string name, IP4Addr address) cacheRecord, Task<string> query)>();
 					// Try all subdomains of the current domain, starting from the longest subdomain
 					foreach (var cachedSubdomain in subdomains.Skip(i).Reverse()) {
 						if (this.cache.TryGetValue(cachedSubdomain, out cacheRecord)) {
 							// Possible cache hit, check if the record is still valid
-							TimeSpan cacheRecordAge = cacheRecord.Item2 - DateTime.Now;
+							TimeSpan cacheRecordAge = cacheRecord.time - DateTime.Now;
 							// Record is young enough, trust it 
 							if ((int)cacheRecordAge.TotalMilliseconds < RecursiveResolver.TTL) {
-								res = cacheRecord.Item1;
+								res = cacheRecord.address;
 								i = cachedSubdomain.Split(".").Length - 1;	
 								// Console.WriteLine($"{domain} -- Unvalidated cache hit {cachedSubdomain} to {res}");
 								goto End; // oof
 							// Record is too old, validate it with reverse query
 							} else {
-								var cacheQuery = this.dnsClient.Reverse(cacheRecord.Item1);
-								cacheValidations.Add(((cachedSubdomain, cacheRecord.Item1), cacheQuery));
+								var cacheQuery = this.dnsClient.Reverse(cacheRecord.address);
+								cacheValidations.Add(((cachedSubdomain, cacheRecord.address), cacheQuery));
 							}
 						}
 					}
 					// Wait for the first Reverse Task to finish and then wait a bit for the other Tasks
 					// That way, a stuck Task will not block
-					Task.WaitAny(cacheValidations.Select(i => i.Item2).ToArray(), 110);
+					Task.WaitAny(cacheValidations.Select(i => i.query).ToArray(), 110);
 					System.Threading.Thread.Sleep(10);
 
-					var finishedTasks = cacheValidations.FindAll(r => r.Item2.Status == TaskStatus.RanToCompletion).ToList();
+					var finishedTasks = cacheValidations.FindAll(r => r.query.Status == TaskStatus.RanToCompletion).ToList();
 
 					foreach (var validation in finishedTasks) {
-						if (validation.Item1.Item1 != validation.Item2.Result) {
-							this.cache.TryRemove(validation.Item1.Item1, out _);
+						if (validation.cacheRecord.name != validation.query.Result) {
+							this.cache.TryRemove(validation.cacheRecord.name, out _);
 						} else {
 							// Validated, refresh the TTL
-							this.cache.TryAdd(validation.Item1.Item1, (validation.Item1.Item2, DateTime.Now));
+							this.cache.TryAdd(validation.cacheRecord.name, (validation.cacheRecord.address, DateTime.Now));
 						}
 					}
 					// Find "longest" subdomain that is validated
-					var validatedSubdomain = finishedTasks.FindAll(validation => validation.Item1.Item1 == validation.Item2.Result)
-							.Select(validation => validation.Item1.Item1)
+					var validatedSubdomain = finishedTasks.FindAll(validation => validation.cacheRecord.name == validation.query.Result)
+							.Select(validation => validation.cacheRecord.name)
 							.OrderByDescending(x => x.Split(".").Length)
 							.FirstOrDefault();
 
@@ -102,7 +102,7 @@ namespace dns_netcore
 						// Calculate how many subdomains we've jumped ahead by using the cached results
 						// Console.WriteLine($"Query {domain} -- Validated cache hit {validatedSubdomain} to {res}");
 						i = validatedSubdomain.Split(".").Length - 1;
-						res = cacheRecord.Item1;
+						res = cacheRecord.address;
 					} else {
 						fallbackQuery.Wait();
 						res = fallbackQuery.Result;
