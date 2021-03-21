@@ -63,8 +63,8 @@ namespace dns_netcore
 						if (this.cache.TryGetValue(cachedSubdomain, out cacheRecord)) {
 							// Possible cache hit, check if the record is still valid
 							TimeSpan cacheRecordAge = DateTime.Now - cacheRecord.time;
-							// Record is young enough, trust it 
-							if ((int)cacheRecordAge.TotalMilliseconds < RecursiveResolver.TTL) {
+							// Record is young (and long) enough, trust it 
+							if ((cachedSubdomain == domain) && (int)cacheRecordAge.TotalMilliseconds < RecursiveResolver.TTL) {
 								res = cacheRecord.address;
 								i = cachedSubdomain.Split(".").Length - 1;	
 								// Console.WriteLine($"{domain} -- Unvalidated cache hit {cachedSubdomain} to {res}");
